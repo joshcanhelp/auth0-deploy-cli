@@ -842,6 +842,114 @@ describe('#databases handler', () => {
       ]);
     });
 
+    it('should strip legacy password fields on export when password_options is present', async () => {
+      const auth0 = {
+        connections: {
+          list: function (params) {
+            (() => expect(this).to.not.be.undefined)();
+            return mockPagedData(params, 'connections', [
+              {
+                id: 'con1',
+                strategy: 'auth0',
+                name: 'Username-Password-Authentication',
+                options: {
+                  password_options: { complexity: { min_length: 10 } },
+                  passwordPolicy: 'good',
+                  password_complexity_options: { min_length: 8 },
+                  password_history: { enable: true, size: 5 },
+                  password_no_personal_info: { enable: true },
+                  password_dictionary: { enable: true, dictionary: [] },
+                  brute_force_protection: true,
+                },
+              },
+            ]);
+          },
+          clients: {
+            get: () => Promise.resolve(mockPagedData({}, 'clients', [])),
+          },
+        },
+        clients: {
+          list: function (params) {
+            (() => expect(this).to.not.be.undefined)();
+            return mockPagedData(params, 'clients', []);
+          },
+        },
+        actions: {
+          list: (params) => mockPagedData(params, 'actions', []),
+        },
+        pool,
+      };
+
+      const handler = new databases.default({ client: pageClient(auth0), config });
+      const data = await handler.getType();
+
+      // Legacy password fields must be stripped when password_options is present,
+      // leaving password_options and unrelated options intact so the export stays deployable.
+      expect(data).to.deep.equal([
+        {
+          id: 'con1',
+          strategy: 'auth0',
+          name: 'Username-Password-Authentication',
+          options: {
+            password_options: { complexity: { min_length: 10 } },
+            brute_force_protection: true,
+          },
+        },
+      ]);
+    });
+
+    it('should preserve legacy password fields on export when password_options is absent', async () => {
+      const auth0 = {
+        connections: {
+          list: function (params) {
+            (() => expect(this).to.not.be.undefined)();
+            return mockPagedData(params, 'connections', [
+              {
+                id: 'con1',
+                strategy: 'auth0',
+                name: 'Username-Password-Authentication',
+                options: {
+                  passwordPolicy: 'good',
+                  password_history: { enable: true, size: 5 },
+                  brute_force_protection: true,
+                },
+              },
+            ]);
+          },
+          clients: {
+            get: () => Promise.resolve(mockPagedData({}, 'clients', [])),
+          },
+        },
+        clients: {
+          list: function (params) {
+            (() => expect(this).to.not.be.undefined)();
+            return mockPagedData(params, 'clients', []);
+          },
+        },
+        actions: {
+          list: (params) => mockPagedData(params, 'actions', []),
+        },
+        pool,
+      };
+
+      const handler = new databases.default({ client: pageClient(auth0), config });
+      const data = await handler.getType();
+
+      // A legacy-only connection must be untouched.
+      expect(data).to.deep.equal([
+        {
+          id: 'con1',
+          strategy: 'auth0',
+          name: 'Username-Password-Authentication',
+          options: {
+            passwordPolicy: 'good',
+            password_history: { enable: true, size: 5 },
+            brute_force_protection: true,
+          },
+        },
+      ]);
+    });
+
     it('should update database', async () => {
       const auth0 = {
         connections: {
@@ -2912,5 +3020,115 @@ describe('#databases handler with enabled clients integration', () => {
 
       processConnectionEnabledClientsStub.restore();
     });
+  });
+});
+
+describe('#databases dryRunChanges', () => {
+  // Regression tests for #1450: AUTH0_IGNORE_DRY_RUN_FIELDS was silently a no-op
+  // for databases because dryRunChanges used this.ignoreDryRunFields (constructor
+  // defaults only) instead of this.getEffectiveIgnoreDryRunFields() (which merges
+  // in the AUTH0_IGNORE_DRY_RUN_FIELDS config value).
+
+  const pool = {
+    addEachTask: (data) => {
+      if (data.data && data.data.length) data.generator(data.data[0]);
+      return { promise: () => null };
+    },
+    addSingleTask: (task) => {
+      const result = task.generator(task.data);
+      return { promise: () => Promise.resolve(result) };
+    },
+  };
+
+  it('should suppress diffs for fields listed in AUTH0_IGNORE_DRY_RUN_FIELDS', async () => {
+    const auth0 = {
+      connections: {
+        // Remote includes options: {} so getFormattedOptions doesn't produce a spurious diff
+        list: (params) =>
+          mockPagedData(params, 'connections', [
+            {
+              id: 'con_1',
+              name: 'test-db',
+              strategy: 'auth0',
+              options: {},
+              noisy_field: 'remote_value',
+            },
+          ]),
+      },
+      clients: {
+        list: (params) => mockPagedData(params, 'clients', []),
+      },
+      actions: {
+        list: (params) => mockPagedData(params, 'actions', []),
+      },
+      pool,
+    };
+
+    const config = (key) => {
+      if (key === 'AUTH0_IGNORE_DRY_RUN_FIELDS') return { databases: ['noisy_field'] };
+      if (key === 'AUTH0_CLIENT_ID') return 'client_id';
+    };
+
+    const handler = new databases.default({ client: pageClient(auth0), config });
+
+    const assets = {
+      databases: [
+        {
+          name: 'test-db',
+          strategy: 'auth0',
+          options: {},
+          noisy_field: 'local_value', // differs from remote — but must be ignored
+        },
+      ],
+    };
+
+    const changes = await handler.dryRunChanges(assets);
+
+    // noisy_field is configured to be ignored — no update should be reported
+    expect(changes.update).to.have.length(0);
+  });
+
+  it('should report diffs for fields not in AUTH0_IGNORE_DRY_RUN_FIELDS', async () => {
+    const auth0 = {
+      connections: {
+        list: (params) =>
+          mockPagedData(params, 'connections', [
+            {
+              id: 'con_1',
+              name: 'test-db',
+              strategy: 'auth0',
+              options: {},
+              tracked_field: 'remote_value',
+            },
+          ]),
+      },
+      clients: {
+        list: (params) => mockPagedData(params, 'clients', []),
+      },
+      actions: {
+        list: (params) => mockPagedData(params, 'actions', []),
+      },
+      pool,
+    };
+
+    // No AUTH0_IGNORE_DRY_RUN_FIELDS configured
+    const config = (key) => ({ AUTH0_CLIENT_ID: 'client_id' }[key]);
+
+    const handler = new databases.default({ client: pageClient(auth0), config });
+
+    const assets = {
+      databases: [
+        {
+          name: 'test-db',
+          strategy: 'auth0',
+          options: {},
+          tracked_field: 'local_value', // differs from remote — should be detected
+        },
+      ],
+    };
+
+    const changes = await handler.dryRunChanges(assets);
+
+    expect(changes.update).to.have.length(1);
   });
 });
