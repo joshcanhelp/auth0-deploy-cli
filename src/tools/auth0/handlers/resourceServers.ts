@@ -1,10 +1,10 @@
 import { Management } from 'auth0';
-import ValidationError from '../../validationError';
 
 import constants from '../../constants';
 import DefaultHandler from './default';
 import { Assets } from '../../../types';
 import { paginate } from '../client';
+import log from '../../../logger';
 
 export const excludeSchema = {
   type: 'array',
@@ -113,19 +113,19 @@ export default class ResourceServersHandler extends DefaultHandler {
   async getType(): Promise<ResourceServer[]> {
     if (this.existing) return this.existing;
 
-    let resourceServers = await paginate<ResourceServer>(this.client.resourceServers.list, {
+    const resourceServers = await paginate<ResourceServer>(this.client.resourceServers.list, {
       paginate: true,
     });
-
-    resourceServers = resourceServers.filter(
-      (rs) => rs.name !== constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME
-    );
 
     // Sanitize resource servers fields
     const sanitizeResourceServersFields = (rs: ResourceServer[]): ResourceServer[] =>
       rs.map((resourceServer: ResourceServer) => {
-        // For system resource servers like Auth0 My Account API, only allow certain fields to be updated
-        if (resourceServer.is_system === true) {
+        // For system resource servers like Auth0 My Account API and Auth0 Management API,
+        // only allow certain fields to be updated
+        if (
+          resourceServer.is_system === true ||
+          resourceServer.name === constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME
+        ) {
           const allowedKeys = [
             'token_lifetime',
             'proof_of_possession',
@@ -159,15 +159,6 @@ export default class ResourceServersHandler extends DefaultHandler {
     // Do nothing if not set
     if (!resourceServers) return;
 
-    const mgmtAPIResource = resourceServers.find(
-      (r) => r.name === constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME
-    );
-    if (mgmtAPIResource) {
-      throw new ValidationError(
-        `You can not configure the '${constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME}'.`
-      );
-    }
-
     await super.validate(assets);
   }
 
@@ -181,12 +172,31 @@ export default class ResourceServersHandler extends DefaultHandler {
 
     const filterResourceServer = (items) => items.filter((r) => !excluded.includes(r.name));
 
+    // Hard guardrail: the built-in Management API resource server can only ever be updated.
+    // It always exists on the tenant and can't be created or deleted via the API, so silently
+    // drop it from those buckets instead of letting a delete/create call fail against Auth0.
+    const isManagementAPI = (r) => r.name === constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME;
+    const dropManagementAPI = (items, action: 'deleted' | 'created') => {
+      const [blocked, allowed] = [
+        items.filter(isManagementAPI),
+        items.filter((r) => !isManagementAPI(r)),
+      ];
+      blocked.forEach(() =>
+        log.warn(
+          `Skipping ${action === 'deleted' ? 'deletion' : 'creation'} of '${
+            constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME
+          }'. This is a built-in resource server and cannot be ${action} via the Management API.`
+        )
+      );
+      return allowed;
+    };
+
     const { del, update, create, conflicts } = await this.calcChanges(assets);
 
     const changes = {
-      del: filterResourceServer(del),
+      del: filterResourceServer(dropManagementAPI(del, 'deleted')),
       update: filterResourceServer(update),
-      create: filterResourceServer(create),
+      create: filterResourceServer(dropManagementAPI(create, 'created')),
       conflicts: filterResourceServer(conflicts),
     };
 
@@ -200,7 +210,11 @@ export default class ResourceServersHandler extends DefaultHandler {
     update: ResourceServer
   ): Promise<Management.UpdateResourceServerResponseContent> {
     // Exclude name from update as it cannot be modified for system resource servers like Auth0 My Account API
-    if (update.is_system === true || update.name === 'Auth0 My Account API') {
+    if (
+      update.is_system === true ||
+      update.name === 'Auth0 My Account API' ||
+      update.name === constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME
+    ) {
       const updateFields: Management.UpdateResourceServerRequestContent = {
         token_lifetime: update.token_lifetime,
         proof_of_possession: update.proof_of_possession,

@@ -43,7 +43,7 @@ describe('#resourceServers handler', () => {
       }
     });
 
-    it('should not allow "Auth0 Management API" name', async () => {
+    it('should allow "Auth0 Management API" name', async () => {
       const handler = new resourceServers.default({ client: {}, config });
       const stageFn = Object.getPrototypeOf(handler).validate;
       const data = [
@@ -52,12 +52,7 @@ describe('#resourceServers handler', () => {
         },
       ];
 
-      try {
-        await stageFn.apply(handler, [{ resourceServers: data }]);
-      } catch (err) {
-        expect(err).to.be.an('object');
-        expect(err.message).to.include("You can not configure the 'Auth0 Management API'.");
-      }
+      await stageFn.apply(handler, [{ resourceServers: data }]);
     });
 
     it('should pass validation', async () => {
@@ -317,7 +312,7 @@ describe('#resourceServers handler', () => {
       ]);
     });
 
-    it('should get resource servers', async () => {
+    it('should get resource servers, sanitizing "Auth0 Management API" fields', async () => {
       const auth0 = {
         resourceServers: {
           list: (params) =>
@@ -333,7 +328,10 @@ describe('#resourceServers handler', () => {
 
       const handler = new resourceServers.default({ client: pageClient(auth0), config });
       const data = await handler.getType();
-      expect(data).to.deep.equal([{ name: 'Company API', identifier: 'http://company.com/api' }]);
+      expect(data).to.deep.equal([
+        { name: 'Auth0 Management API', identifier: 'https://test.auth0.com/api/v2/' },
+        { name: 'Company API', identifier: 'http://company.com/api' },
+      ]);
     });
 
     it('should update resource server', async () => {
@@ -963,6 +961,150 @@ describe('#resourceServers handler', () => {
 
       await stageFn.apply(handler, [data]);
       expect(updateCalled).to.equal(true);
+    });
+
+    it('should sanitize "Auth0 Management API" fields in getType even without is_system', async () => {
+      const mgmtResourceServer = {
+        id: 'rs_mgmt',
+        identifier: 'https://tenant.auth0.com/api/v2/',
+        name: 'Auth0 Management API',
+        token_lifetime: 86400,
+        scopes: [{ value: 'read:users' }], // Should be removed
+        allow_offline_access: true, // Should be removed
+      };
+
+      const auth0 = {
+        resourceServers: {
+          list: (params) => mockPagedData(params, 'resource_servers', [mgmtResourceServer]),
+        },
+        pool,
+      };
+
+      const handler = new resourceServers.default({ client: pageClient(auth0), config });
+      const result = await handler.getType();
+
+      expect(result).to.deep.equal([
+        {
+          id: 'rs_mgmt',
+          identifier: 'https://tenant.auth0.com/api/v2/',
+          name: 'Auth0 Management API',
+          token_lifetime: 86400,
+        },
+      ]);
+    });
+
+    it('should restrict update fields for "Auth0 Management API"', async () => {
+      let updateCalledWith = null;
+      const existingResourceServer = {
+        id: 'rs_mgmt',
+        identifier: 'https://tenant.auth0.com/api/v2/',
+        name: 'Auth0 Management API',
+      };
+
+      const auth0 = {
+        resourceServers: {
+          create: () => Promise.resolve({ data: [] }),
+          update: function (id, data) {
+            updateCalledWith = data;
+            return Promise.resolve({ data });
+          },
+          delete: () => Promise.resolve({ data: [] }),
+          list: (params) => mockPagedData(params, 'resource_servers', [existingResourceServer]),
+        },
+        pool,
+      };
+
+      const handler = new resourceServers.default({ client: pageClient(auth0), config });
+      const stageFn = Object.getPrototypeOf(handler).processChanges;
+
+      await stageFn.apply(handler, [
+        {
+          resourceServers: [
+            {
+              name: 'Auth0 Management API',
+              identifier: 'https://tenant.auth0.com/api/v2/',
+              token_lifetime: 54321,
+            },
+          ],
+        },
+      ]);
+
+      expect(updateCalledWith).to.not.equal(null);
+      expect(updateCalledWith.name).to.equal(undefined);
+      expect(updateCalledWith.identifier).to.equal(undefined);
+      expect(updateCalledWith.token_lifetime).to.equal(54321);
+    });
+
+    it('should never delete "Auth0 Management API" even when missing from local config with AUTH0_ALLOW_DELETE', async () => {
+      let deleteCalled = false;
+      const existingManagementAPI = {
+        id: 'rs_mgmt',
+        identifier: 'https://tenant.auth0.com/api/v2/',
+        name: 'Auth0 Management API',
+      };
+
+      const auth0 = {
+        resourceServers: {
+          create: () => Promise.resolve({ data: [] }),
+          update: () => Promise.resolve({ data: [] }),
+          delete: () => {
+            deleteCalled = true;
+            return Promise.resolve({ data: [] });
+          },
+          list: (params) => mockPagedData(params, 'resource_servers', [existingManagementAPI]),
+        },
+        pool,
+      };
+
+      const handler = new resourceServers.default({ client: pageClient(auth0), config });
+      const stageFn = Object.getPrototypeOf(handler).processChanges;
+
+      await stageFn.apply(handler, [{ resourceServers: [] }]);
+
+      expect(deleteCalled).to.equal(false);
+    });
+
+    it('should never create a duplicate "Auth0 Management API" even if the local identifier differs', async () => {
+      let createCalled = false;
+      let deleteCalled = false;
+      const existingManagementAPI = {
+        id: 'rs_mgmt',
+        identifier: 'https://tenant.auth0.com/api/v2/',
+        name: 'Auth0 Management API',
+      };
+
+      const auth0 = {
+        resourceServers: {
+          create: () => {
+            createCalled = true;
+            return Promise.resolve({ data: [] });
+          },
+          update: () => Promise.resolve({ data: [] }),
+          delete: () => {
+            deleteCalled = true;
+            return Promise.resolve({ data: [] });
+          },
+          list: (params) => mockPagedData(params, 'resource_servers', [existingManagementAPI]),
+        },
+        pool,
+      };
+
+      const handler = new resourceServers.default({ client: pageClient(auth0), config });
+      const stageFn = Object.getPrototypeOf(handler).processChanges;
+
+      await stageFn.apply(handler, [
+        {
+          resourceServers: [
+            {
+              name: 'Auth0 Management API',
+              identifier: 'https://tenant.auth0.com/api/v2/wrong',
+            },
+          ],
+        },
+      ]);
+
+      expect(createCalled).to.equal(false);
+      expect(deleteCalled).to.equal(false);
     });
   });
 });
