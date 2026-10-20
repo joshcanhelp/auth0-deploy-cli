@@ -963,6 +963,53 @@ describe('#resourceServers handler', () => {
       expect(updateCalled).to.equal(true);
     });
 
+    it('should exclude only name when updating an is_system resource server that is not a known built-in', async () => {
+      let updateCalledWith = null;
+      const existingResourceServer = {
+        id: 'rs_other_system',
+        identifier: 'https://api.other-system.com/',
+        name: 'Some Other System API',
+        is_system: true,
+      };
+
+      const auth0 = {
+        resourceServers: {
+          create: () => Promise.resolve({ data: [] }),
+          update: function (id, data) {
+            updateCalledWith = data;
+            return Promise.resolve({ data });
+          },
+          delete: () => Promise.resolve({ data: [] }),
+          list: (params) =>
+            mockPagedData(params, 'resource_servers', [existingResourceServer]),
+        },
+        pool,
+      };
+
+      const handler = new resourceServers.default({ client: pageClient(auth0), config });
+      const stageFn = Object.getPrototypeOf(handler).processChanges;
+
+      await stageFn.apply(handler, [
+        {
+          resourceServers: [
+            {
+              name: 'Some Other System API',
+              identifier: 'https://api.other-system.com/',
+              is_system: true,
+              token_lifetime: 54321,
+              scopes: [{ value: 'read:things' }],
+            },
+          ],
+        },
+      ]);
+
+      expect(updateCalledWith).to.not.equal(null);
+      expect(updateCalledWith.name).to.equal(undefined);
+      expect(updateCalledWith.is_system).to.equal(undefined);
+      expect(updateCalledWith.token_lifetime).to.equal(54321);
+      expect(updateCalledWith.scopes).to.deep.equal([{ value: 'read:things' }]);
+    });
+
     it('should sanitize "Auth0 Management API" fields in getType even without is_system', async () => {
       const mgmtResourceServer = {
         id: 'rs_mgmt',

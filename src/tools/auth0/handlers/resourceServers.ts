@@ -99,7 +99,7 @@ export default class ResourceServersHandler extends DefaultHandler {
       type: 'resourceServers',
       identifiers: ['id', 'identifier'],
       stripCreateFields: ['client_id', 'is_system'],
-      stripUpdateFields: ['identifier', 'client_id', 'is_system'],
+      stripUpdateFields: ['identifier', 'client_id'],
       functions: {
         update: (id: string, data) => this.updateResourceServer(id, data),
       },
@@ -209,9 +209,12 @@ export default class ResourceServersHandler extends DefaultHandler {
     id: string,
     update: ResourceServer
   ): Promise<Management.UpdateResourceServerResponseContent> {
-    // Exclude name from update as it cannot be modified for system resource servers like Auth0 My Account API
+    // `is_system` itself is read-only and must never be sent back to the API.
+    const { is_system, ...rest } = update;
+
+    // Auth0 Management API and Auth0 My Account API only accept a small allowlist of
+    // fields - name cannot be modified for either.
     if (
-      update.is_system === true ||
       update.name === 'Auth0 My Account API' ||
       update.name === constants.RESOURCE_SERVERS_MANAGEMENT_API_NAME
     ) {
@@ -227,6 +230,13 @@ export default class ResourceServersHandler extends DefaultHandler {
       return this.client.resourceServers.update(id, updateFields);
     }
 
-    return this.client.resourceServers.update(id, update);
+    // Other system resource servers (is_system: true) can't have their name changed either.
+    // Add more field exclusions here as additional unsupported fields are discovered.
+    if (is_system === true) {
+      const { name, ...withoutName } = rest;
+      return this.client.resourceServers.update(id, withoutName);
+    }
+
+    return this.client.resourceServers.update(id, rest);
   }
 }
