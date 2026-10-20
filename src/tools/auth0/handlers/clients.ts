@@ -649,7 +649,13 @@ export default class ClientHandler extends DefaultAPIHandler {
       id: 'client_id',
       identifiers: ['client_id', 'name'],
       objectFields: ['client_metadata'],
-      stripCreateFields: ['external_metadata_type', 'external_metadata_created_by', 'jwks_uri'],
+      stripCreateFields: [
+        'external_metadata_type',
+        'external_metadata_created_by',
+        'jwks_uri',
+        'created_at',
+        'updated_at',
+      ],
       stripUpdateFields: [
         // Fields not allowed during updates
         'callback_url_template',
@@ -661,6 +667,8 @@ export default class ClientHandler extends DefaultAPIHandler {
         'external_metadata_type',
         'external_metadata_created_by',
         'jwks_uri',
+        'created_at',
+        'updated_at',
         // third_party_security_mode is immutable after creation; PATCH returns 400
         'third_party_security_mode',
       ],

@@ -2108,6 +2108,67 @@ describe('#clients handler', () => {
       expect(updatePayloads['client1']).to.not.have.property('token_vault_privileged_access');
       expect(createPayloads[0]).to.not.have.property('token_vault_privileged_access');
     });
+
+    it('should strip created_at and updated_at from create and update payloads', async () => {
+      const createPayloads = [];
+      const updatePayloads = {};
+
+      const auth0 = {
+        clients: {
+          create: (data) => {
+            createPayloads.push(data);
+            return Promise.resolve({ data });
+          },
+          update: (clientId, data) => {
+            updatePayloads[clientId] = data;
+            return Promise.resolve({ data });
+          },
+          delete: () => Promise.resolve({ data: {} }),
+          list: (params) =>
+            mockPagedData(params, 'clients', [
+              {
+                client_id: 'client1',
+                name: 'Existing App',
+                created_at: '2020-01-01T00:00:00.000Z',
+                updated_at: '2020-01-02T00:00:00.000Z',
+              },
+            ]),
+        },
+        connectionProfiles: { list: (params) => mockPagedData(params, 'connectionProfiles', []) },
+        userAttributeProfiles: {
+          list: (params) => mockPagedData(params, 'userAttributeProfiles', []),
+        },
+        pool,
+      };
+
+      const handler = new clients.default({ client: pageClient(auth0), config });
+      const stageFn = Object.getPrototypeOf(handler).processChanges;
+
+      await stageFn.apply(handler, [
+        {
+          clients: [
+            // Existing client, exported with timestamps -> update
+            {
+              client_id: 'client1',
+              name: 'Existing App',
+              created_at: '2020-01-01T00:00:00.000Z',
+              updated_at: '2020-01-02T00:00:00.000Z',
+            },
+            // New client, exported with timestamps -> create
+            {
+              name: 'New App',
+              created_at: '2020-01-01T00:00:00.000Z',
+              updated_at: '2020-01-02T00:00:00.000Z',
+            },
+          ],
+        },
+      ]);
+
+      expect(updatePayloads['client1']).to.not.have.property('created_at');
+      expect(updatePayloads['client1']).to.not.have.property('updated_at');
+      expect(createPayloads[0]).to.not.have.property('created_at');
+      expect(createPayloads[0]).to.not.have.property('updated_at');
+    });
   });
 
   describe('#clients validate', () => {
