@@ -36,7 +36,7 @@ async function dump(context: DirectoryContext) {
   fs.ensureDirSync(folder);
 
   tokenExchangeProfiles.forEach((profile) => {
-    const { id, created_at, updated_at, ...profileWithoutMetadata } = profile;
+    const { created_at, updated_at, ...profileWithoutMetadata } = profile;
     const fileName = path.join(folder, sanitize(`${profile.name}.json`));
     log.info(`Writing ${fileName}`);
     dumpJSON(fileName, profileWithoutMetadata);

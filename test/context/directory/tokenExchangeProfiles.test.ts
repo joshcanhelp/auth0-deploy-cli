@@ -126,15 +126,16 @@ describe('#directory context tokenExchangeProfiles', () => {
     const cisContent = JSON.parse(fs.readFileSync(cisFile, 'utf8'));
     const partnerContent = JSON.parse(fs.readFileSync(partnerFile, 'utf8'));
 
-    // Verify id, created_at and updated_at were removed
-    expect(cisContent).to.not.have.property('id');
+    // Verify created_at and updated_at were removed, but id was preserved
+    // (identifiers are only stripped tenant-wide via AUTH0_EXPORT_IDENTIFIERS)
     expect(cisContent).to.not.have.property('created_at');
     expect(cisContent).to.not.have.property('updated_at');
-    expect(partnerContent).to.not.have.property('id');
     expect(partnerContent).to.not.have.property('created_at');
     expect(partnerContent).to.not.have.property('updated_at');
 
     // Verify other properties were preserved
+    expect(cisContent.id).to.equal('tep_123');
+    expect(partnerContent.id).to.equal('tep_456');
     expect(cisContent.name).to.equal('CIS token exchange');
     expect(cisContent.subject_token_type).to.equal('https://acme.com/cis-token');
     expect(cisContent.action).to.equal('my-action');
